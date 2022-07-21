@@ -83,8 +83,10 @@ type instance struct {
 	inputParam         string
 	realTimeStreaming  bool
 	audioStatus        bool
-	signalCh           chan struct{}
-	endSignal          chan struct{}
+	signalCh           chan struct {
+		title string
+	}
+	endSignal chan struct{}
 }
 
 func newInstance() *instance {
@@ -100,7 +102,7 @@ func newInstance() *instance {
 		inputParam:        "",
 		realTimeStreaming: false,
 		audioStatus:       false,
-		signalCh:          make(chan struct{}, 10),
+		signalCh:          make(chan struct{ title string }, 10),
 		endSignal:         make(chan struct{}, 1),
 	}
 	i.intervalSlice = append(i.intervalSlice, 200)
@@ -175,17 +177,21 @@ func (i *instance) Draw() error {
 				return nil
 			}
 		case <-time.After(time.Second * 5):
-			syslog.Clog.Errorln("If there is no difference or increment in 5S, it will exit automatically")
+			{
+				syslog.Clog.Errorln("If there is no difference or increment in 5S, it will exit automatically\n")
+				return nil
+			}
 		case <-i.endSignal:
 			time.Sleep(time.Second * 1)
 			return nil
-		case <-i.signalCh:
+		case sig := <-i.signalCh:
 			if len(i.intervalSlice) >= termWidth-5 { // -5, So that the latest difference can be shown on the chart
 				i.intervalSlice = i.intervalSlice[1:]
 				lc.Data[0] = i.intervalSlice
 			} else {
 				lc.Data[0] = i.intervalSlice
 			}
+			lc.Title = sig.title
 			lc.Data[0][0] = 200
 			ui.Render(grid)
 			if !i.realTimeStreaming {
@@ -204,33 +210,39 @@ func (i *instance) HandleFlvTag(flvTag *tag.FlvTag) {
 		{
 			i.lastAudioTimeStamp = flvTag.Timestamp
 			if i.lastAudioTimeStamp != 0 && i.lastVideoTimeStamp != 0 {
+				title := "[audio > video](ms)"
 				dValue := int32(i.lastAudioTimeStamp) - int32(i.lastVideoTimeStamp)
 				if dValue < 0 {
 					dValue *= -1
+					title = "[video > audio](ms)"
 				}
 				if i.maxInterval < dValue {
 					i.maxInterval = dValue
 				}
 				d := float64(dValue)
 				i.intervalSlice = append(i.intervalSlice, d)
-				i.signalCh <- struct{}{}
+				i.signalCh <- struct{ title string }{
+					title: title,
+				}
 			}
 		}
 	case tag.TypeVideo:
 		{
 			if !i.audioStatus {
+				title := "[video only](ms)"
 				dValue := int32(flvTag.Timestamp) - int32(i.lastVideoTimeStamp)
 				if i.maxInterval < dValue {
 					i.maxInterval = dValue
 				}
 				d := float64(dValue)
 				i.intervalSlice = append(i.intervalSlice, d)
-				i.signalCh <- struct{}{}
+				i.signalCh <- struct{ title string }{
+					title: title,
+				}
 			}
 			i.lastVideoTimeStamp = flvTag.Timestamp
 		}
 	}
-	return
 }
 
 // FlvSrc ...
